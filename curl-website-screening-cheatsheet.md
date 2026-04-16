@@ -48,6 +48,9 @@ Write output to a file.
 ### `-c` and `-b`
 Save cookies to a file and send cookies from a file.
 
+### `--max-redirs N`
+Limit the number of redirects curl will follow. If the limit is reached, curl exits with an error instead of continuing. Useful for detecting redirect loops.
+
 ---
 
 # 1) Basic website screening
@@ -395,6 +398,67 @@ What it does:
 Use it for:
 - checking schema or canonical inconsistencies
 
+## 28. Check the HTML lang attribute
+```bash
+curl -sL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" https://example.com/en | grep -i "<html"
+```
+What it does:
+- fetches the page as Googlebot and extracts the opening `<html>` tag
+- reveals the declared language of the document
+
+Use it for:
+- confirming that `/en` returns `<html lang="en">` and `/fr` returns `<html lang="fr">`
+- validating that language handling is reflected in the markup, not just the URL
+
+## 29. Check hreflang tags
+```bash
+curl -sL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" https://example.com/en | grep -i "hreflang"
+```
+What it does:
+- fetches the page and extracts all `hreflang` alternate link tags
+
+Use it for:
+- verifying that each language version cross-references the other
+- checking whether a self-referencing hreflang and `x-default` are present
+
+## 30. Check robots.txt response headers without following redirects
+```bash
+curl -sI -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" https://example.com/robots.txt
+```
+What it does:
+- sends a HEAD request to `/robots.txt` as Googlebot
+- does not follow redirects, so you see exactly what that specific path returns
+
+Use it for:
+- confirming whether `robots.txt` returns `200` with `content-type: text/plain`
+- detecting whether a CDN or edge function intercepts the path and serves something unexpected
+
+## 31. Check redirect loop limit
+```bash
+curl -sIL --max-redirs 10 -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" https://example.com/fr
+```
+What it does:
+- follows up to 10 redirects and exits with an error if the limit is reached
+
+Use it for:
+- detecting redirect loops between language versions or domain variants
+- if curl exits with "too many redirects", a loop exists
+
+## 32. Combine User-Agent and Accept-Language to test language override behavior
+```bash
+curl -sIL \
+  -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  -H "Accept-Language: fr-FR,fr;q=0.9" \
+  https://example.com/en
+```
+What it does:
+- sends a Googlebot User-Agent alongside a French language preference header
+- tests whether an explicit URL path (`/en`) overrides language detection logic at the CDN or server
+
+Use it for:
+- confirming that visiting `/en` keeps the user on English regardless of browser language
+- detecting whether Accept-Language-based redirects interfere with explicit language URLs
+
 ---
 
 # 9) Timing and availability checks
@@ -452,6 +516,73 @@ curl -I -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.h
 Interpretation:
 - compare destinations and cookies
 - confirm whether behavior changes only by language preference or also by client identity
+
+## Workflow E: Full crawler parity and language stability audit
+> Commands used in: **The Canadian Encyclopedia — full test analysis after implementation**
+> Client site had been suspended by Google. This workflow was used to verify all fixes were correctly applied.
+
+```bash
+# 1. Fetch robots.txt as anonymous client — confirm it is accessible and returns correct content
+curl -s https://example.com/robots.txt
+
+# 2. Follow full redirect chain with no User-Agent — baseline behavior for unidentified clients
+curl -sIL https://example.com/
+
+# 3. Follow full redirect chain as Googlebot — compare against baseline
+curl -sIL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://example.com/
+
+# 4. Follow full redirect chain as Chrome — confirm browsers and Googlebot behave identically
+curl -sIL -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+  https://example.com/
+
+# 5. Check robots.txt as Googlebot — headers only, no redirect follow
+curl -sI -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://example.com/robots.txt
+
+# 6. Check canonical tag as Googlebot — verify canonical is present and points to the correct URL
+curl -sL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://example.com/ | grep -i "canonical"
+
+# 7. Verify www redirects to non-www as Googlebot
+curl -sIL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://www.example.com/en
+
+# 8. Confirm HTML lang attribute per language version
+curl -sL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://example.com/en | grep -i "<html"
+curl -sL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://example.com/fr | grep -i "<html"
+
+# 9. Confirm canonical per language version — each should point to itself
+curl -sL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://example.com/en | grep -i "canonical"
+curl -sL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://example.com/fr | grep -i "canonical"
+
+# 10. Check hreflang tags on each language version
+curl -sL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://example.com/en | grep -i "hreflang"
+curl -sL -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://example.com/fr | grep -i "hreflang"
+
+# 11. Check for redirect loops — if max-redirs is reached, a loop exists
+curl -sIL --max-redirs 10 -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  https://example.com/fr
+
+# 12. Confirm explicit language URL ignores Accept-Language header
+curl -sIL \
+  -A "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" \
+  -H "Accept-Language: fr-FR,fr;q=0.9" \
+  https://example.com/en
+```
+
+Interpretation:
+- Steps 2, 3, 4 compared together detect cloaking — if Googlebot and Chrome get different status codes or redirect destinations than anonymous clients, behavior is conditional
+- Step 5 confirms whether a CDN function is intercepting `robots.txt` and serving HTML instead of plain text
+- Steps 8–10 validate that language signals in the HTML are consistent with the URL structure
+- Step 11 is the loop detection safety net — any result other than a direct `200` with no intermediate redirects warrants investigation
+- Step 12 confirms that explicit paths take priority over browser language preference
 
 ## Workflow D: Does the final HTML contain canonical mismatches?
 ```bash
